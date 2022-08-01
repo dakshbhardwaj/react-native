@@ -11,6 +11,8 @@
 
 const {danger, fail, message, warn} = require('danger');
 const includes = require('lodash.includes');
+const {exec} = require('child_process');
+const fs = require('fs');
 
 const isFromPhabricator =
   danger.github.pr.body &&
@@ -109,6 +111,44 @@ if (isMergeRefStable) {
       repo,
       issueNumber,
       labels: ['Pick Request'],
+    },
+  );
+}
+
+// ESLINT
+const js_files = danger.git.modified_files.filter(
+  name => name.endsWith('.js') || name.endsWith('.jsx'),
+);
+if (js_files.length > 0) {
+  const joined_files = js_files.map(name => '../' + name).join(' ');
+  exec(
+    `
+    npx eslint -f json -o /tmp/eslint.output ${joined_files}`,
+    (error, stdout, stderr) => {
+      try {
+        const eslintOutput = fs.readFileSync('/tmp/eslint.output', 'utf8');
+        const eslintJSON = JSON.parse(eslintOutput);
+        const faultyFiles = eslintJSON.filter(file => file.messages.length > 0);
+        let messageText = '';
+        faultyFiles.forEach(file => {
+          const path = file.filePath;
+          const splitPath = path.split('/');
+          messageText += `${splitPath[splitPath.length - 1]} - ${path}\n`;
+
+          file.messages.forEach(msg => {
+            const emoji =
+              msg.severity === 1 ? '⚠️' : msg.severity === 2 ? '⛔️' : '✅';
+            const format = `[${msg.line}:${msg.column}] ${emoji} - ${msg.message} (${msg.ruleId})\n`;
+            messageText += format;
+          });
+          messageText += '\n';
+        });
+        if (messageText.length !== 0) {
+          warn(messageText);
+        }
+      } catch (err) {
+        fail(`Couldn't read the lint file output\n${err}`);
+      }
     },
   );
 }
